@@ -1,0 +1,8 @@
+## Interface: 11503
+## Title: Instance Buddies|cFF00FF00 v1.0|r
+## Notes: Track your party members on dungeon runs for Classic Era
+## Author: VolviX
+## Version: 1.0
+## SavedVariables: InstanceBuddiesDB
+
+InstanceBuddies.lua 
