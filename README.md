@@ -16,9 +16,10 @@ A World of Warcraft Classic Era addon that tracks your group members on instance
 - **Debounced Search**: Optimizes search performance during typing
 - **Memory Management**: Automatic tooltip cleanup prevents memory leaks
 - **Efficient Pagination**: Handles large datasets without performance impact
+- **Centralized Database**: All of your runs across your characters pool in the same storage
 
 ## Backups
-The addon stores data  at `..\World of Warcraft\_classic_era_\WTF\Account\ACCOUNT_ID\SavedVariables\InstanceBuddies.lua`
+The addon stores data at `..\World of Warcraft\_classic_era_\WTF\Account\ACCOUNT_ID\SavedVariables\InstanceBuddies.lua`
 
 ## Contacts
 - **Discord**: cembingol
@@ -29,4 +30,4 @@ The addon stores data  at `..\World of Warcraft\_classic_era_\WTF\Account\ACCOUN
 This addon is designed to enhance the Classic Era community experience. Feedback, suggestions, bug reports, and pull requests are always welcome!
 
 ## Credits
-**Inspired from**: NovaInstanceTracker by Venomisto
+**Inspired by**: NovaInstanceTracker by Venomisto
