@@ -6,7 +6,7 @@ A World of Warcraft Classic Era addon that tracks your group members on instance
 
 **Commands**: /ib, /ibuddies, /instancebuddies
 
-## Features
+## Features
 - **Automatic Run Detection**: Seamlessly tracks when you complete dungeons and raids
 - **Group Composition Recording**: Stores information about all party/raid members' level and class
 - **Search Functionality**: Find specific runs, players, or instances quickly
