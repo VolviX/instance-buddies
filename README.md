@@ -6,6 +6,7 @@ A World of Warcraft Classic Era addon that tracks your group members on instance
 
 **Commands**: /ib, /ibuddies, /instancebuddies
 
+## Features
 - **Automatic Run Detection**: Seamlessly tracks when you complete dungeons and raids
 - **Group Composition Recording**: Stores information about all party/raid members' level and class
 - **Search Functionality**: Find specific runs, players, or instances quickly
@@ -16,18 +17,16 @@ A World of Warcraft Classic Era addon that tracks your group members on instance
 - **Memory Management**: Automatic tooltip cleanup prevents memory leaks
 - **Efficient Pagination**: Handles large datasets without performance impact
 
-
+## Backups
 The addon stores data in  at `..\World of Warcraft\_classic_era_\WTF\Account\ACCOUNT_ID\SavedVariables\InstanceBuddies.lua`
-
 
 ## Contacts
 - **Discord**: cembingol
 - **X**: @cembingool  
 - **In-Game**: Maddjones-Soulseeker
 
-### Contributing
+## Contributing
 This addon is designed to enhance the Classic Era community experience. Feedback, suggestions, bug reports, and pull requests are always welcome!
 
-### Credits
-
+## Credits
 **Inspired from**: NovaInstanceTracker by Venomisto
