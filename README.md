@@ -18,7 +18,7 @@ A World of Warcraft Classic Era addon that tracks your group members on instance
 - **Efficient Pagination**: Handles large datasets without performance impact
 
 ## Backups
-The addon stores data in  at `..\World of Warcraft\_classic_era_\WTF\Account\ACCOUNT_ID\SavedVariables\InstanceBuddies.lua`
+The addon stores data  at `..\World of Warcraft\_classic_era_\WTF\Account\ACCOUNT_ID\SavedVariables\InstanceBuddies.lua`
 
 ## Contacts
 - **Discord**: cembingol
