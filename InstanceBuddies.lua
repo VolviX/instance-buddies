@@ -721,10 +721,10 @@ function IB:UpdatePartySection()
     
     if not history then
         -- Not in a group
-        partySection:SetText("Join a group to see your dungeon history with them!")
+        partySection:SetText("Join a group to see your shared history with them!")
     elseif #history == 0 then
         -- In a group but no shared history
-        partySection:SetText("No shared dungeon history with your current party members.")
+        partySection:SetText("No shared history with your current group.")
     else
         -- Has shared history - build the message
         local historyParts = {}
@@ -813,9 +813,17 @@ function IB:UpdateMainFrame()
         noDataText:SetTextColor(1, 1, 1)
         table.insert(self.mainFrame.runRows, {noDataText})
         
-        -- Hide pagination controls and search when no data
+        -- Hide pagination controls when no results
         self.mainFrame.paginationFrame:Hide()
-        self.mainFrame.searchFrame:Hide()
+        
+        -- Only hide search when there's truly no data in the database (not just no search results)
+        if not self.searchTerm or self.searchTerm == "" then
+            -- No data at all - hide search
+            self.mainFrame.searchFrame:Hide()
+        else
+            -- Search returned no results but database has data - keep search visible
+            self.mainFrame.searchFrame:Show()
+        end
     else
         -- Show pagination controls and search
         self.mainFrame.paginationFrame:Show()
@@ -1100,7 +1108,7 @@ SlashCmdList["INSTANCEBUDDIES"] = function(msg)
     IB:CreateMainFrame()
 end
 
-print("|cFF00FF00InstanceBuddies|r dungeon tracker loaded! Use /ib, /ibuddies, or /instancebuddies to view history.")
+print("|cFF00FF00InstanceBuddies|r loaded! Use /ib, /ibuddies, or /instancebuddies to view your instance history.")
 
 -- Memory management - destroys tooltip FontString objects to prevent accumulation
 function IB:CleanupTooltips()

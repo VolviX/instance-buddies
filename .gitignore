@@ -39,5 +39,6 @@ luac.out
 *.x86_64
 *.hex
 
-# Cursor
+# Project
 .cursorrules
+.vscode
