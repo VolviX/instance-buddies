@@ -25,7 +25,6 @@ IB.filteredDislikes = nil   -- Cached search results for dislikes
 
 -- Performance optimization throttles
 local recordGroupInfoThrottle = 0    -- Prevents spam recording of group changes
-local searchDebounceTimer = nil      -- Delays search execution for better UX
 
 -- Main UI Frame
 function IB:CreateMainFrame()
@@ -73,6 +72,11 @@ function IB:CreateMainFrame()
         -- Close voting frame if open
         if IB.votingFrame then
             IB:CleanupVotingFrame()
+        end
+        -- Clean up search debounce timer
+        if IB.searchDebounceTimer then
+            IB.searchDebounceTimer:SetScript("OnUpdate", nil)
+            IB.searchDebounceTimer = nil
         end
         frame:Hide() 
     end)
@@ -263,21 +267,20 @@ function IB:CreateMainFrame()
         if userInput then
             IB.searchTerm = self:GetText()
             
-            -- Clean up previous timer to prevent memory leaks
-            if searchDebounceTimer then
-                searchDebounceTimer:SetScript("OnUpdate", nil)
-                searchDebounceTimer:Hide()
-                searchDebounceTimer = nil
+            -- Create reusable timer frame if it doesn't exist
+            if not IB.searchDebounceTimer then
+                IB.searchDebounceTimer = CreateFrame("Frame")
             end
             
-            -- Delay search execution for better performance
-            searchDebounceTimer = CreateFrame("Frame")
+            -- Stop any existing timer
+            IB.searchDebounceTimer:SetScript("OnUpdate", nil)
+            
+            -- Start new timer with current timestamp
             local startTime = GetTime()
-            searchDebounceTimer:SetScript("OnUpdate", function(timerFrame)
+            IB.searchDebounceTimer:SetScript("OnUpdate", function(timerFrame)
                 if GetTime() - startTime >= 0.3 then -- 300ms delay
                     IB:PerformSearch()
                     timerFrame:SetScript("OnUpdate", nil)
-                    timerFrame:Hide()
                 end
             end)
         end
