@@ -14,9 +14,14 @@ IB.currentRun = nil         -- Active run data while in instance
 IB.currentPage = 1
 IB.entriesPerPage = 10
 
+-- View mode management
+IB.currentView = "pastRuns"  -- "pastRuns", "likes", "dislikes"
+
 -- Search functionality
 IB.searchTerm = ""          -- Current search query
-IB.filteredRuns = nil       -- Cached search results
+IB.filteredRuns = nil       -- Cached search results for runs
+IB.filteredLikes = nil      -- Cached search results for likes
+IB.filteredDislikes = nil   -- Cached search results for dislikes
 
 -- Performance optimization throttles
 local recordGroupInfoThrottle = 0    -- Prevents spam recording of group changes
@@ -27,10 +32,18 @@ function IB:CreateMainFrame()
     if self.mainFrame then 
         if self.mainFrame:IsShown() then
             self:CleanupTooltips()  -- Prevent memory leaks
+            -- Close voting frame if open
+            if self.votingFrame then
+                self.votingFrame:Hide()
+                self.votingFrame = nil
+            end
             self.mainFrame:Hide()
         else
             self.currentPage = 1    -- Reset pagination on reopen
-            self:UpdateMainFrame()
+            self.currentView = "pastRuns"  -- Reset to past runs view
+            self.searchTerm = ""    -- Clear search on reopen
+            self.mainFrame.searchBox:SetText("")  -- Clear search box display
+            self:PerformSearch()    -- Regenerate filtered results and update display
             self.mainFrame:Show()
         end
         return 
@@ -38,9 +51,9 @@ function IB:CreateMainFrame()
     
     -- Main window setup
     local frame = CreateFrame("Frame", "InstanceBuddiesMainFrame", UIParent)
-    frame:SetSize(825, 420)
+    frame:SetSize(825, 450)
     frame:SetPoint("CENTER")
-    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
     
     local bg = frame:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -57,15 +70,66 @@ function IB:CreateMainFrame()
     closeBtn:SetText("Close")
     closeBtn:SetScript("OnClick", function() 
         IB:CleanupTooltips()  -- Essential for memory management
+        -- Close voting frame if open
+        if IB.votingFrame then
+            IB.votingFrame:Hide()
+            IB.votingFrame = nil
+        end
         frame:Hide() 
     end)
     
-    -- Party history section - shows shared runs with current group members
-    local partySection = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    partySection:SetPoint("TOP", 0, -45)
-    partySection:SetWidth(800)
-    partySection:SetJustifyH("CENTER")
-    partySection:SetTextColor(0.8, 0.8, 1)
+    -- Navigation buttons at top-left
+    local pastRunsBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    pastRunsBtn:SetSize(80, 25)
+    pastRunsBtn:SetPoint("TOPLEFT", 15, -15)
+    pastRunsBtn:SetText("Past Runs")
+    pastRunsBtn:SetScript("OnClick", function()
+        IB.currentView = "pastRuns"
+        IB.currentPage = 1
+        -- Clear other filtered data
+        IB.filteredLikes = nil
+        IB.filteredDislikes = nil
+        IB:PerformSearch()
+    end)
+    
+    local likesBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    likesBtn:SetSize(60, 25)
+    likesBtn:SetPoint("LEFT", pastRunsBtn, "RIGHT", 5, 0)
+    likesBtn:SetText("Likes")
+    likesBtn:SetScript("OnClick", function()
+        IB.currentView = "likes"
+        IB.currentPage = 1
+        -- Clear other filtered data
+        IB.filteredRuns = nil
+        IB.filteredDislikes = nil
+        IB:PerformSearch()
+    end)
+    
+    local dislikesBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    dislikesBtn:SetSize(70, 25)
+    dislikesBtn:SetPoint("LEFT", likesBtn, "RIGHT", 5, 0)
+    dislikesBtn:SetText("Dislikes")
+    dislikesBtn:SetScript("OnClick", function()
+        IB.currentView = "dislikes"
+        IB.currentPage = 1
+        -- Clear other filtered data
+        IB.filteredRuns = nil
+        IB.filteredLikes = nil
+        IB:PerformSearch()
+    end)
+    
+    -- Party history section - shows shared runs with current group members (two lines)
+    local partyHistoryLine = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    partyHistoryLine:SetPoint("TOP", 0, -45)
+    partyHistoryLine:SetWidth(800)
+    partyHistoryLine:SetJustifyH("CENTER")
+    partyHistoryLine:SetTextColor(0.8, 0.8, 1)
+    
+    local socialStatusLine = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    socialStatusLine:SetPoint("TOP", 0, -62)
+    socialStatusLine:SetWidth(800)
+    socialStatusLine:SetJustifyH("CENTER")
+    socialStatusLine:SetTextColor(0.8, 0.8, 1)
     
     -- Tooltip infrastructure for detailed shared history
     local tooltip = CreateFrame("Frame", nil, frame)
@@ -92,8 +156,8 @@ function IB:CreateMainFrame()
     
     -- Search functionality
     local searchFrame = CreateFrame("Frame", nil, frame)
-    searchFrame:SetPoint("TOPLEFT", 15, -70)
-    searchFrame:SetPoint("TOPRIGHT", -15, -70)
+    searchFrame:SetPoint("TOPLEFT", 15, -85)
+    searchFrame:SetPoint("TOPRIGHT", -15, -85)
     searchFrame:SetHeight(30)
     
     local searchLabel = searchFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -109,7 +173,7 @@ function IB:CreateMainFrame()
     
     -- Scrollable content area for run history
     local scrollFrame = CreateFrame("ScrollFrame", nil, frame)
-    scrollFrame:SetPoint("TOPLEFT", 15, -105)
+    scrollFrame:SetPoint("TOPLEFT", 15, -120)
     scrollFrame:SetPoint("BOTTOMRIGHT", -15, 80)  -- Space reserved for pagination/contact
     
     local contentFrame = CreateFrame("Frame", nil, scrollFrame)
@@ -146,10 +210,20 @@ function IB:CreateMainFrame()
     nextBtn:SetPoint("RIGHT", 0, 0)
     nextBtn:SetText("Next Page")
     nextBtn:SetScript("OnClick", function()
-        -- Safe database access with fallback
-        local runs = IB.filteredRuns or (InstanceBuddiesDB and InstanceBuddiesDB.runs) or {}
-        local totalRuns = #runs
-        local totalPages = math.ceil(totalRuns / IB.entriesPerPage)
+        -- Get the appropriate data list based on current view (same logic as UpdateMainFrame)
+        local dataList
+        if IB.currentView == "pastRuns" then
+            dataList = IB.filteredRuns or (InstanceBuddiesDB and InstanceBuddiesDB.runs) or {}
+        elseif IB.currentView == "likes" then
+            dataList = IB.filteredLikes or IB:GetLikesData() or {}
+        elseif IB.currentView == "dislikes" then
+            dataList = IB.filteredDislikes or IB:GetDislikesData() or {}
+        else
+            dataList = {}
+        end
+        
+        local totalItems = #dataList
+        local totalPages = math.ceil(totalItems / IB.entriesPerPage)
         if IB.currentPage < totalPages then
             IB.currentPage = IB.currentPage + 1
             IB:UpdateMainFrame()
@@ -175,10 +249,14 @@ function IB:CreateMainFrame()
     frame.prevBtn = prevBtn
     frame.nextBtn = nextBtn
     frame.pageText = pageText
-    frame.partySection = partySection
+    frame.partyHistoryLine = partyHistoryLine
+    frame.socialStatusLine = socialStatusLine
     frame.tooltip = tooltip
     frame.searchBox = searchBox
     frame.searchFrame = searchFrame
+    frame.pastRunsBtn = pastRunsBtn
+    frame.likesBtn = likesBtn
+    frame.dislikesBtn = dislikesBtn
     self.mainFrame = frame
     
     -- Search with debouncing to prevent excessive filtering during typing
@@ -206,8 +284,25 @@ function IB:CreateMainFrame()
         end
     end)
     
-    -- Enable ESC key to close window
-    table.insert(UISpecialFrames, "InstanceBuddiesMainFrame")
+    -- Handle ESC key manually to respect voting frame hierarchy
+    frame:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" then
+            -- Only close main frame if voting frame isn't open
+            if not IB.votingFrame then
+                IB:CleanupTooltips()
+                frame:Hide()
+                -- Only consume ESC when we actually handle it
+                self:SetPropagateKeyboardInput(false)
+            else
+                -- Voting frame is open, let it handle ESCAPE
+                self:SetPropagateKeyboardInput(true)
+            end
+        else
+            -- Allow other keys to pass through
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
+    frame:EnableKeyboard(true)
     
     self:PerformSearch()  -- Initialize with current data
     frame:Show()
@@ -379,8 +474,8 @@ function IB:GetGroupDungeonHistory()
     return history
 end
 
--- Retrieves detailed shared run data for tooltip display (limited to last 20)
-function IB:GetSharedRunsForTooltip()
+-- Get social status (likes/dislikes) for current group members
+function IB:GetGroupSocialStatus()
     local currentMembers = self:GetCurrentGroupMembers()
     if #currentMembers == 0 then
         return {}
@@ -390,57 +485,149 @@ function IB:GetSharedRunsForTooltip()
         return {}
     end
     
-    -- Create lookup table for faster searching
-    local currentMemberNames = {}
+    -- Track all votes for each member to detect mixed votes
+    local memberVotes = {}
     for _, member in ipairs(currentMembers) do
-        currentMemberNames[member.name] = member.class
+        memberVotes[member.name] = {
+            class = member.class,
+            hasLike = false,
+            hasDislike = false,
+            latestVote = nil,
+            latestTimestamp = 0
+        }
     end
     
-    -- Find runs containing any current group member
-    local sharedRuns = {}
+    -- Search through all runs to find votes for current group members
     for _, run in ipairs(InstanceBuddiesDB.runs) do
         if run.groupData then
-            local runMembers = {}
-            for memberName, _ in pairs(run.groupData) do
-                if currentMemberNames[memberName] then
-                    table.insert(runMembers, {
-                        name = memberName,
-                        class = currentMemberNames[memberName]
-                    })
+            for memberName, memberData in pairs(run.groupData) do
+                -- Check if this member is in current group and has a vote
+                if memberVotes[memberName] and memberData.voteType then
+                    local runTimestamp = run.enteredTime or 0
+                    
+                    -- Track what types of votes this member has
+                    if memberData.voteType == "like" then
+                        memberVotes[memberName].hasLike = true
+                    elseif memberData.voteType == "dislike" then
+                        memberVotes[memberName].hasDislike = true
+                    end
+                    
+                    -- Keep track of latest vote for fallback
+                    if runTimestamp > memberVotes[memberName].latestTimestamp then
+                        memberVotes[memberName].latestVote = memberData.voteType
+                        memberVotes[memberName].latestTimestamp = runTimestamp
+                    end
                 end
             end
-            
-            if #runMembers > 0 then
-                table.insert(sharedRuns, {
-                    instanceName = run.instanceName,
-                    enteredTime = run.enteredTime,
-                    sharedMembers = runMembers
-                })
+        end
+    end
+    
+    -- Build result array (only members with votes)
+    local socialStatus = {}
+    for name, data in pairs(memberVotes) do
+        if data.hasLike or data.hasDislike then
+            local voteType
+            if data.hasLike and data.hasDislike then
+                voteType = "mixed" -- Both likes and dislikes
+            else
+                voteType = data.latestVote -- Single type of vote
             end
+            
+            table.insert(socialStatus, {
+                name = name,
+                class = data.class,
+                voteType = voteType
+            })
         end
     end
     
-    -- Limit results to prevent tooltip overflow
-    local maxRuns = 20
-    if #sharedRuns > maxRuns then
-        local limitedRuns = {}
-        for i = 1, maxRuns do
-            table.insert(limitedRuns, sharedRuns[i])
+    -- Sort by vote type (mixed first, then dislikes, then likes), then alphabetically
+    table.sort(socialStatus, function(a, b)
+        if a.voteType == b.voteType then
+            return a.name < b.name
         end
-        sharedRuns = limitedRuns
-    end
+        -- Priority: mixed > dislike > like
+        local priorities = {mixed = 1, dislike = 2, like = 3}
+        return (priorities[a.voteType] or 999) < (priorities[b.voteType] or 999)
+    end)
     
-    return sharedRuns
+    return socialStatus
 end
 
--- Show the shared runs tooltip
-function IB:ShowPartyTooltip()
+
+
+
+
+-- Hide the shared runs tooltip
+function IB:HidePartyTooltip()
     if not self.mainFrame or not self.mainFrame.tooltip then return end
     
     local tooltip = self.mainFrame.tooltip
-    local sharedRuns = self:GetSharedRunsForTooltip()
+    tooltip:Hide()
+    tooltip:ClearAllPoints() -- Clear positioning for next show
+end
+
+-- Show the unified tooltip with both group history and vote details
+function IB:ShowUnifiedTooltip()
+    if not self.mainFrame or not self.mainFrame.tooltip then return end
     
-    if #sharedRuns == 0 then return end
+    local tooltip = self.mainFrame.tooltip
+    local currentMembers = self:GetCurrentGroupMembers()
+    
+    if #currentMembers == 0 then return end
+    
+    -- Collect all shared run data with vote information
+    local sharedData = {}
+    
+    if InstanceBuddiesDB and InstanceBuddiesDB.runs then
+        -- Create lookup table for current members
+        local currentMemberLookup = {}
+        for _, member in ipairs(currentMembers) do
+            currentMemberLookup[member.name] = member.class
+        end
+        
+        -- Search through all runs for shared data
+        for _, run in ipairs(InstanceBuddiesDB.runs) do
+            if run.groupData then
+                -- Find current group members in this run
+                local runMembers = {}
+                for memberName, memberData in pairs(run.groupData) do
+                    if currentMemberLookup[memberName] then
+                        table.insert(runMembers, {
+                            name = memberName,
+                            class = currentMemberLookup[memberName],
+                            level = memberData.level or 0,
+                            voteType = memberData.voteType,
+                            notes = memberData.voteNote
+                        })
+                    end
+                end
+                
+                -- Add entries for each shared member in this run
+                for _, member in ipairs(runMembers) do
+                    table.insert(sharedData, {
+                        timestamp = run.enteredTime,
+                        instanceName = run.instanceName,
+                        memberName = member.name,
+                        memberClass = member.class,
+                        memberLevel = member.level,
+                        voteType = member.voteType,
+                        notes = member.notes
+                    })
+                end
+            end
+        end
+    end
+    
+    if #sharedData == 0 then return end
+    
+    -- Sort by timestamp (most recent first), then alphabetically by member name
+    table.sort(sharedData, function(a, b)
+        if a.timestamp == b.timestamp then
+            return a.memberName < b.memberName
+        end
+        return a.timestamp > b.timestamp
+    end)
     
     -- Properly destroy existing tooltip rows to prevent memory leaks
     for _, row in pairs(tooltip.rows) do
@@ -453,31 +640,66 @@ function IB:ShowPartyTooltip()
     -- Add title
     local title = tooltip.content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 5, -5)
-    title:SetText("Shared Dungeon History")
+    title:SetText("Group History & Social Status")
     title:SetTextColor(1, 1, 0.5) -- Yellow title
     table.insert(tooltip.rows, title)
     
     local yOffset = -25
     local rowHeight = 16
     
-    -- Add each shared run
-    for i, run in ipairs(sharedRuns) do
+    -- Add each shared run entry
+    for i, data in ipairs(sharedData) do
+        -- Limit to prevent tooltip overflow
+        if i > 20 then
+            local moreRow = tooltip.content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            moreRow:SetPoint("TOPLEFT", 5, yOffset)
+            moreRow:SetText(string.format("|cFF888888... and %d more entries|r", #sharedData - 20))
+            table.insert(tooltip.rows, moreRow)
+            yOffset = yOffset - rowHeight
+            break
+        end
+        
         local row = tooltip.content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         row:SetPoint("TOPLEFT", 5, yOffset)
         row:SetJustifyH("LEFT")
+        row:SetWidth(490)
         
-        -- Build member list with class colors
-        local memberParts = {}
-        for _, member in ipairs(run.sharedMembers) do
-            local classColor = self:GetClassColor(member.class)
-            table.insert(memberParts, string.format("%s%s|r", classColor, member.name))
+        local memberClassColor = self:GetClassColor(data.memberClass or "UNKNOWN")
+        local timeStr = self:FormatTimestamp(data.timestamp)
+        
+        -- Build the base text with timestamp, instance, level, and name
+        local text = string.format("%s - |cFF00BFFF%s|r - |cFF888888%d|r %s%s|r", 
+            timeStr or "Unknown time",
+            data.instanceName or "Unknown",
+            data.memberLevel or 0,
+            memberClassColor or "|cFFFFFFFF",
+            data.memberName or "Unknown"
+        )
+        
+        -- Add vote status and notes only if there's a vote
+        if data.voteType then
+            local voteStatus = ""
+            if data.voteType == "like" then
+                voteStatus = " |cFF00FF00(liked)|r"
+            elseif data.voteType == "dislike" then
+                voteStatus = " |cFFFF0000(disliked)|r"
+            end
+            
+            -- Add vote status
+            text = text .. voteStatus
+            
+            -- Add notes section for voted players
+            local notesText, notesColor
+            if data.notes and data.notes ~= "" then
+                notesText = data.notes
+                notesColor = "|cFFCCCCCC" -- Light gray for actual notes
+            else
+                notesText = "no notes"
+                notesColor = "|cFF888888" -- Darker gray for "no notes"
+            end
+            
+            text = text .. string.format(" - %s%s|r", notesColor, notesText)
         end
-        
-        -- Format: "Today 15:23 - Maraudon - with PlayerX, PlayerY"
-        local timeStr = self:FormatTimestamp(run.enteredTime)
-        local memberStr = table.concat(memberParts, ", ")
-        local text = string.format("%s - |cFF00BFFF%s|r - with %s", 
-            timeStr, run.instanceName or "Unknown", memberStr)
         
         row:SetText(text)
         row:SetTextColor(1, 1, 1)
@@ -487,7 +709,7 @@ function IB:ShowPartyTooltip()
     end
     
     -- Calculate tooltip size
-    local width = 500
+    local width = 550
     local height = math.abs(yOffset) + 15 -- Add some padding
     height = math.min(height, 400) -- Cap maximum height
     height = math.max(height, 80)  -- Minimum height
@@ -516,15 +738,6 @@ function IB:ShowPartyTooltip()
     
     tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x + 10, y - 10)
     tooltip:Show()
-end
-
--- Hide the shared runs tooltip
-function IB:HidePartyTooltip()
-    if not self.mainFrame or not self.mainFrame.tooltip then return end
-    
-    local tooltip = self.mainFrame.tooltip
-    tooltip:Hide()
-    tooltip:ClearAllPoints() -- Clear positioning for next show
 end
 
 -- Show the group members tooltip for truncated lists
@@ -697,55 +910,751 @@ function IB:FilterRuns(searchTerm)
         end
     end
     
+    -- Sort by entry timestamp (newest first) for consistency
+    table.sort(filteredRuns, function(a, b)
+        return (a.enteredTime or 0) > (b.enteredTime or 0)
+    end)
+    
     return filteredRuns
 end
 
 -- Executes search and refreshes UI (called after debounce delay)
 function IB:PerformSearch()
-    self.filteredRuns = self:FilterRuns(self.searchTerm)
+    if self.currentView == "pastRuns" then
+        self.filteredRuns = self:FilterRuns(self.searchTerm)
+    elseif self.currentView == "likes" then
+        self.filteredLikes = self:FilterVotes(self.searchTerm, "like")
+    elseif self.currentView == "dislikes" then
+        self.filteredDislikes = self:FilterVotes(self.searchTerm, "dislike")
+    end
     self.currentPage = 1 -- Reset to first page when search changes
     self:UpdateMainFrame()
 end
 
--- Update the current party section
+-- Update the current party section (two-line approach)
 function IB:UpdatePartySection()
-    if not self.mainFrame or not self.mainFrame.partySection then return end
+    if not self.mainFrame or not self.mainFrame.partyHistoryLine or not self.mainFrame.socialStatusLine then return end
     
     local history = self:GetGroupDungeonHistory()
-    local partySection = self.mainFrame.partySection
+    local partyHistoryLine = self.mainFrame.partyHistoryLine
+    local socialStatusLine = self.mainFrame.socialStatusLine
     
-    -- First, clear any existing hover handlers
-    partySection:SetScript("OnEnter", nil)
-    partySection:SetScript("OnLeave", nil)
-    partySection:EnableMouse(false)
+    -- Clear any existing hover handlers from both lines
+    partyHistoryLine:SetScript("OnEnter", nil)
+    partyHistoryLine:SetScript("OnLeave", nil)
+    partyHistoryLine:EnableMouse(false)
+    socialStatusLine:SetScript("OnEnter", nil)
+    socialStatusLine:SetScript("OnLeave", nil)
+    socialStatusLine:EnableMouse(false)
     
     if not history then
         -- Not in a group
-        partySection:SetText("Join a group to see your shared history with them!")
-    elseif #history == 0 then
-        -- In a group but no shared history
-        partySection:SetText("No shared history with your current group.")
+        partyHistoryLine:SetText("Join a group to see your shared history with them!")
+        socialStatusLine:SetText("")
+        return
+    end
+    
+    -- Get social status for current group members
+    local socialStatus = self:GetGroupSocialStatus()
+    
+    if #history == 0 and #socialStatus == 0 then
+        -- In a group but no shared history or social status
+        partyHistoryLine:SetText("No shared history with your current group.")
+        socialStatusLine:SetText("")
     else
-        -- Has shared history - build the message
-        local historyParts = {}
-        for _, member in ipairs(history) do
-            local classColor = self:GetClassColor(member.class)
-            local runText = member.count == 1 and "run" or "runs"
-            table.insert(historyParts, string.format("%d %s with %s%s|r", 
-                member.count, runText, classColor, member.name))
+        -- Build history line
+        if #history > 0 then
+            local historyParts = {}
+            for _, member in ipairs(history) do
+                local classColor = self:GetClassColor(member.class)
+                local runText = member.count == 1 and "run" or "runs"
+                table.insert(historyParts, string.format("%d %s with %s%s|r", 
+                    member.count, runText, classColor, member.name))
+            end
+            
+            local historyMessage = "Group history: " .. table.concat(historyParts, ", ") .. " |cFF888888(hover for details)|r"
+            partyHistoryLine:SetText(historyMessage)
+            
+            -- Always enable hover tooltip for shared history when there's history
+            partyHistoryLine:EnableMouse(true)
+            partyHistoryLine:SetScript("OnEnter", function()
+                IB:ShowUnifiedTooltip()
+            end)
+            partyHistoryLine:SetScript("OnLeave", function()
+                IB:HidePartyTooltip()
+            end)
+        else
+            partyHistoryLine:SetText("")
         end
         
-        local message = "Group history: " .. table.concat(historyParts, ", ") .. " |cFF888888(hover for details)|r"
-        partySection:SetText(message)
+        -- Build social status line
+        if #socialStatus > 0 then
+            local statusParts = {}
+            for _, status in ipairs(socialStatus) do
+                local classColor = self:GetClassColor(status.class)
+                local statusText, statusColor
+                if status.voteType == "mixed" then
+                    statusText = "(mixed)"
+                    statusColor = "|cFFFFFF00" -- Yellow for mixed
+                elseif status.voteType == "like" then
+                    statusText = "(liked)"
+                    statusColor = "|cFF00FF00" -- Green for liked
+                else -- dislike
+                    statusText = "(disliked)"
+                    statusColor = "|cFFFF0000" -- Red for disliked
+                end
+                table.insert(statusParts, string.format("%s%s|r %s%s|r", 
+                    classColor, status.name, statusColor, statusText))
+            end
+            
+            local socialMessage = "Social status: " .. table.concat(statusParts, ", ") .. " |cFF888888(hover for details)|r"
+            socialStatusLine:SetText(socialMessage)
+            
+            -- Enable hover tooltip for social status
+            socialStatusLine:EnableMouse(true)
+            socialStatusLine:SetScript("OnEnter", function()
+                IB:ShowUnifiedTooltip()
+            end)
+            socialStatusLine:SetScript("OnLeave", function()
+                IB:HidePartyTooltip()
+            end)
+        else
+            socialStatusLine:SetText("")
+        end
+    end
+end
+
+-- Create and show the voting frame for a specific run
+function IB:ShowVotingFrame(run)
+    if not run then return end
+    
+    -- Close existing voting frame if open
+    if self.votingFrame then
+        self.votingFrame:Hide()
+        self.votingFrame = nil
+    end
+    
+    -- Main voting frame
+    local frame = CreateFrame("Frame", "InstanceBuddiesVotingFrame", UIParent)
+    frame:SetSize(350, 260)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame:SetFrameLevel(100)  -- Above main frame
+    
+    local bg = frame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.1, 0.1, 0.1, 0.95)
+    
+    local border = frame:CreateTexture(nil, "BORDER")
+    border:SetAllPoints()
+    border:SetColorTexture(0.3, 0.3, 0.3, 1)
+    border:SetPoint("TOPLEFT", -1, 1)
+    border:SetPoint("BOTTOMRIGHT", 1, -1)
+    
+    -- Title
+    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -15)
+    title:SetText("Vote on Group Members")
+    title:SetTextColor(1, 1, 1)
+    
+    -- Instance info
+    local instanceInfo = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    instanceInfo:SetPoint("TOP", 0, -35)
+    instanceInfo:SetText(string.format("%s - |cFF00BFFF%s|r", 
+        self:FormatTimestamp(run.enteredTime),
+        run.instanceName or "Unknown"))
+    
+    -- Close button
+    local closeBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    closeBtn:SetSize(50, 20)
+    closeBtn:SetPoint("TOPRIGHT", -10, -10)
+    closeBtn:SetText("Close")
+    closeBtn:SetScript("OnClick", function() 
+        frame:Hide()
+        self.votingFrame = nil
+    end)
+    
+    -- Party members selection area
+    local membersLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    membersLabel:SetPoint("TOPLEFT", 15, -65)
+    membersLabel:SetText("Select group members to vote on:")
+    membersLabel:SetTextColor(1, 1, 1)
+    
+    -- Scrollable area for party member checkboxes
+    local scrollFrame = CreateFrame("ScrollFrame", nil, frame)
+    scrollFrame:SetPoint("TOPLEFT", 15, -85)
+    scrollFrame:SetPoint("TOPRIGHT", -15, -85)
+    scrollFrame:SetHeight(85)
+    
+    local scrollBg = scrollFrame:CreateTexture(nil, "BACKGROUND")
+    scrollBg:SetAllPoints()
+    scrollBg:SetColorTexture(0.05, 0.05, 0.05, 0.8)
+    
+    local contentFrame = CreateFrame("Frame", nil, scrollFrame)
+    contentFrame:SetSize(scrollFrame:GetWidth(), 1)
+    scrollFrame:SetScrollChild(contentFrame)
+    
+    -- Create checkboxes for each party member
+    local memberCheckboxes = {}
+    local sortedMembers = self:GetSortedGroupMembers(run.groupData)
+    local yOffset = -5
+    
+    for i, member in ipairs(sortedMembers) do
+        local checkbox = CreateFrame("CheckButton", nil, contentFrame, "UICheckButtonTemplate")
+        checkbox:SetSize(16, 16)
+        checkbox:SetPoint("TOPLEFT", 10, yOffset)
         
-        -- Enable hover tooltip for shared history
-        partySection:EnableMouse(true)
-        partySection:SetScript("OnEnter", function()
-            IB:ShowPartyTooltip()
+        local label = contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("LEFT", checkbox, "RIGHT", 5, 0)
+        label:SetText(string.format("%s%s|r", self:GetClassColor(member.class), member.name))
+        
+        memberCheckboxes[member.name] = checkbox
+        yOffset = yOffset - 20
+    end
+    
+    -- Update content frame height
+    contentFrame:SetHeight(math.max(80, math.abs(yOffset) + 10))
+    
+    -- Notes area
+    local notesLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    notesLabel:SetPoint("TOPLEFT", 15, -175)
+    notesLabel:SetText("Notes (optional):")
+    notesLabel:SetTextColor(1, 1, 1)
+    
+    local notesBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    notesBox:SetSize(320, 20)
+    notesBox:SetPoint("TOPLEFT", 15, -195)
+    notesBox:SetMultiLine(false)
+    notesBox:SetAutoFocus(false)
+    notesBox:SetMaxLetters(200)
+    
+    -- Vote buttons
+    local likeBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    likeBtn:SetSize(80, 25)
+    likeBtn:SetPoint("TOPLEFT", 50, -230)
+    likeBtn:SetText("Like")
+    likeBtn:SetScript("OnClick", function()
+        local selectedMembers = {}
+        for memberName, checkbox in pairs(memberCheckboxes) do
+            if checkbox:GetChecked() then
+                table.insert(selectedMembers, memberName)
+            end
+        end
+        if #selectedMembers > 0 then
+            self:SubmitVote(run, selectedMembers, "like", notesBox:GetText())
+        end
+        frame:Hide()
+        self.votingFrame = nil
+    end)
+    
+    local dislikeBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    dislikeBtn:SetSize(80, 25)
+    dislikeBtn:SetPoint("TOPRIGHT", -50, -230)
+    dislikeBtn:SetText("Dislike")
+    dislikeBtn:SetScript("OnClick", function()
+        local selectedMembers = {}
+        for memberName, checkbox in pairs(memberCheckboxes) do
+            if checkbox:GetChecked() then
+                table.insert(selectedMembers, memberName)
+            end
+        end
+        if #selectedMembers > 0 then
+            self:SubmitVote(run, selectedMembers, "dislike", notesBox:GetText())
+        end
+        frame:Hide()
+        self.votingFrame = nil
+    end)
+    
+    -- Initially disable buttons and notes since no members are selected
+    likeBtn:SetEnabled(false)
+    dislikeBtn:SetEnabled(false)
+    notesBox:SetEnabled(false)
+    
+    -- Handle Enter key to submit vote (focus on Like button)
+    notesBox:SetScript("OnEnterPressed", function()
+        notesBox:ClearFocus()
+        -- Auto-click Like button if any members are selected
+        local anySelected = false
+        for _, checkbox in pairs(memberCheckboxes) do
+            if checkbox:GetChecked() then
+                anySelected = true
+                break
+            end
+        end
+        if anySelected then
+            likeBtn:Click()
+        end
+    end)
+    
+    -- Function to update button states based on checkbox selection
+    local function updateButtonStates()
+        local anySelected = false
+        for _, checkbox in pairs(memberCheckboxes) do
+            if checkbox:GetChecked() then
+                anySelected = true
+                break
+            end
+        end
+        
+        -- Enable/disable buttons and notes based on selection (same pattern as pagination buttons)
+        likeBtn:SetEnabled(anySelected)
+        dislikeBtn:SetEnabled(anySelected)
+        notesBox:SetEnabled(anySelected)
+    end
+    
+    -- Add click handlers to checkboxes for multi-selection behavior
+    for memberName, checkbox in pairs(memberCheckboxes) do
+        checkbox:SetScript("OnClick", function(self)
+            -- Allow multiple selections - no need to deselect others
+            updateButtonStates()
         end)
-        partySection:SetScript("OnLeave", function()
-            IB:HidePartyTooltip()
+    end
+    
+    -- Enable dragging
+    frame:EnableMouse(true)
+    frame:SetMovable(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    
+    -- Store references
+    frame.memberCheckboxes = memberCheckboxes
+    frame.notesBox = notesBox
+    self.votingFrame = frame
+    
+    -- Handle ESC key manually to close voting frame first
+    frame:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" then
+            -- Check if any input box is focused - if so, let ESCAPE reach the input to clear focus
+            local searchBoxFocused = IB.mainFrame and IB.mainFrame.searchBox and IB.mainFrame.searchBox:HasFocus()
+            local notesBoxFocused = frame.notesBox and frame.notesBox:HasFocus()
+            
+            if searchBoxFocused or notesBoxFocused then
+                -- Let ESCAPE reach the focused input box
+                self:SetPropagateKeyboardInput(true)
+            else
+                -- No input focused, close voting frame
+                frame:Hide()
+                IB.votingFrame = nil
+                self:SetPropagateKeyboardInput(false)  -- Block ESC from propagating further
+            end
+        else
+            self:SetPropagateKeyboardInput(true)   -- Allow other keys to pass through to game
+        end
+    end)
+    frame:EnableKeyboard(true)
+    
+    frame:Show()
+end
+
+-- Updates navigation button states based on current view
+function IB:UpdateNavigationButtons()
+    if not self.mainFrame then return end
+    
+    -- Enable/disable buttons based on current view
+    self.mainFrame.pastRunsBtn:SetEnabled(self.currentView ~= "pastRuns")
+    self.mainFrame.likesBtn:SetEnabled(self.currentView ~= "likes") 
+    self.mainFrame.dislikesBtn:SetEnabled(self.currentView ~= "dislikes")
+end
+
+-- Multi-keyword search across vote data by scanning through runs
+function IB:FilterVotes(searchTerm, voteType)
+    if not InstanceBuddiesDB or not InstanceBuddiesDB.runs then
+        return {}
+    end
+    
+    -- Collect all votes of the specified type from runs
+    local votesOfType = {}
+    for _, run in ipairs(InstanceBuddiesDB.runs) do
+        if run.groupData then
+            -- Get member names and sort them for consistent iteration order
+            local memberNames = {}
+            for memberName, memberData in pairs(run.groupData) do
+                if memberData.voteType == voteType then
+                    table.insert(memberNames, memberName)
+                end
+            end
+            
+            -- Sort member names alphabetically for consistent ordering within same run
+            table.sort(memberNames)
+            
+            -- Process members in sorted order
+            for _, memberName in ipairs(memberNames) do
+                local memberData = run.groupData[memberName]
+                -- Create vote-like object for compatibility
+                local voteObj = {
+                    targetMembers = {memberName},
+                    voteType = voteType,
+                    notes = memberData.voteNote,
+                    instanceName = run.instanceName,
+                    runTimestamp = run.enteredTime,
+                    runPlayerName = run.playerName,
+                    memberClass = memberData.classEnglish,
+                    memberLevel = memberData.level
+                }
+                table.insert(votesOfType, voteObj)
+            end
+        end
+    end
+    
+    if not searchTerm or searchTerm == "" then
+        -- Sort by run timestamp (newest first), then alphabetically by member name
+        table.sort(votesOfType, function(a, b)
+            local aTime = a.runTimestamp or 0
+            local bTime = b.runTimestamp or 0
+            if aTime == bTime then
+                -- Secondary sort: alphabetical by member name
+                local aName = (a.targetMembers and a.targetMembers[1]) or ""
+                local bName = (b.targetMembers and b.targetMembers[1]) or ""
+                return aName < bName
+            end
+            return aTime > bTime
         end)
+        return votesOfType
+    end
+    
+    -- Split search into individual keywords for AND logic
+    local keywords = {}
+    for keyword in string.gmatch(string.lower(searchTerm), "%S+") do
+        table.insert(keywords, keyword)
+    end
+    
+    if #keywords == 0 then
+        table.sort(votesOfType, function(a, b)
+            local aTime = a.runTimestamp or 0
+            local bTime = b.runTimestamp or 0
+            if aTime == bTime then
+                -- Secondary sort: alphabetical by member name
+                local aName = (a.targetMembers and a.targetMembers[1]) or ""
+                local bName = (b.targetMembers and b.targetMembers[1]) or ""
+                return aName < bName
+            end
+            return aTime > bTime
+        end)
+        return votesOfType
+    end
+    
+    local filteredVotes = {}
+    
+    -- Each vote must match ALL keywords to be included
+    for _, vote in ipairs(votesOfType) do
+        local matchesAll = true
+        
+        for _, keyword in ipairs(keywords) do
+            local foundMatch = false
+            
+            -- Search in instance name
+            if vote.instanceName and string.find(string.lower(vote.instanceName), keyword, 1, true) then
+                foundMatch = true
+            end
+            
+            -- Search in target member names
+            if not foundMatch and vote.targetMembers then
+                for _, memberName in ipairs(vote.targetMembers) do
+                    if string.find(string.lower(memberName), keyword, 1, true) then
+                        foundMatch = true
+                        break
+                    end
+                end
+            end
+            
+            -- Search in notes
+            if not foundMatch and vote.notes and string.find(string.lower(vote.notes), keyword, 1, true) then
+                foundMatch = true
+            end
+            
+            -- Search in run player name
+            if not foundMatch and vote.runPlayerName and string.find(string.lower(vote.runPlayerName), keyword, 1, true) then
+                foundMatch = true
+            end
+            
+            -- Fail if this keyword wasn't found anywhere in this vote
+            if not foundMatch then
+                matchesAll = false
+                break
+            end
+        end
+        
+        if matchesAll then
+            table.insert(filteredVotes, vote)
+        end
+    end
+    
+    -- Sort by run timestamp (newest first), then alphabetically by member name
+    table.sort(filteredVotes, function(a, b)
+        local aTime = a.runTimestamp or 0
+        local bTime = b.runTimestamp or 0
+        if aTime == bTime then
+            -- Secondary sort: alphabetical by member name
+            local aName = (a.targetMembers and a.targetMembers[1]) or ""
+            local bName = (b.targetMembers and b.targetMembers[1]) or ""
+            return aName < bName
+        end
+        return aTime > bTime
+    end)
+    
+    return filteredVotes
+end
+
+-- Gets formatted likes data for display by scanning through runs
+function IB:GetLikesData()
+    if not InstanceBuddiesDB or not InstanceBuddiesDB.runs then
+        return {}
+    end
+    
+    local likesData = {}
+    
+    -- Iterate through all runs to collect likes
+    for _, run in ipairs(InstanceBuddiesDB.runs) do
+        if run.groupData then
+            -- Get member names and sort them for consistent iteration order
+            local memberNames = {}
+            for memberName, memberData in pairs(run.groupData) do
+                if memberData.voteType == "like" then
+                    table.insert(memberNames, memberName)
+                end
+            end
+            
+            -- Sort member names alphabetically for consistent ordering within same run
+            table.sort(memberNames)
+            
+            -- Process members in sorted order
+            for _, memberName in ipairs(memberNames) do
+                local memberData = run.groupData[memberName]
+                -- Create vote-like object for compatibility with existing display code
+                local voteObj = {
+                    targetMembers = {memberName},
+                    voteType = "like",
+                    notes = memberData.voteNote,
+                    instanceName = run.instanceName,
+                    runTimestamp = run.enteredTime,
+                    runPlayerName = run.playerName,
+                    -- Add member data for easier access
+                    memberClass = memberData.classEnglish,
+                    memberLevel = memberData.level
+                }
+                table.insert(likesData, voteObj)
+            end
+        end
+    end
+    
+    -- Sort by run timestamp (newest first), then alphabetically by member name
+    table.sort(likesData, function(a, b)
+        local aTime = a.runTimestamp or 0
+        local bTime = b.runTimestamp or 0
+        if aTime == bTime then
+            -- Secondary sort: alphabetical by member name
+            local aName = (a.targetMembers and a.targetMembers[1]) or ""
+            local bName = (b.targetMembers and b.targetMembers[1]) or ""
+            return aName < bName
+        end
+        return aTime > bTime
+    end)
+    
+    return likesData
+end
+
+-- Gets formatted dislikes data for display by scanning through runs
+function IB:GetDislikesData()
+    if not InstanceBuddiesDB or not InstanceBuddiesDB.runs then
+        return {}
+    end
+    
+    local dislikesData = {}
+    
+    -- Iterate through all runs to collect dislikes
+    for _, run in ipairs(InstanceBuddiesDB.runs) do
+        if run.groupData then
+            -- Get member names and sort them for consistent iteration order
+            local memberNames = {}
+            for memberName, memberData in pairs(run.groupData) do
+                if memberData.voteType == "dislike" then
+                    table.insert(memberNames, memberName)
+                end
+            end
+            
+            -- Sort member names alphabetically for consistent ordering within same run
+            table.sort(memberNames)
+            
+            -- Process members in sorted order
+            for _, memberName in ipairs(memberNames) do
+                local memberData = run.groupData[memberName]
+                -- Create vote-like object for compatibility with existing display code
+                local voteObj = {
+                    targetMembers = {memberName},
+                    voteType = "dislike",
+                    notes = memberData.voteNote,
+                    instanceName = run.instanceName,
+                    runTimestamp = run.enteredTime,
+                    runPlayerName = run.playerName,
+                    -- Add member data for easier access
+                    memberClass = memberData.classEnglish,
+                    memberLevel = memberData.level
+                }
+                table.insert(dislikesData, voteObj)
+            end
+        end
+    end
+    
+    -- Sort by run timestamp (newest first), then alphabetically by member name
+    table.sort(dislikesData, function(a, b)
+        local aTime = a.runTimestamp or 0
+        local bTime = b.runTimestamp or 0
+        if aTime == bTime then
+            -- Secondary sort: alphabetical by member name
+            local aName = (a.targetMembers and a.targetMembers[1]) or ""
+            local bName = (b.targetMembers and b.targetMembers[1]) or ""
+            return aName < bName
+        end
+        return aTime > bTime
+    end)
+    
+    return dislikesData
+end
+
+-- Gets class-colored target member names with level for vote display
+function IB:GetColoredTargetMembers(vote)
+    if not vote.targetMembers or #vote.targetMembers == 0 then
+        return {}
+    end
+    
+    local coloredMembers = {}
+    
+    -- Color each target member using embedded class data and level
+    for _, memberName in ipairs(vote.targetMembers) do
+        local memberClass = vote.memberClass  -- Class is now embedded in vote object
+        local memberLevel = vote.memberLevel or 0  -- Level is now embedded in vote object
+        
+        -- Apply class color or default to white
+        local classColor = memberClass and self:GetClassColor(memberClass) or "|cFFFFFFFF"
+        -- Format: level (gray) + name (class colored) - like "54 Megarah"
+        table.insert(coloredMembers, string.format("|cFF888888%d|r %s%s|r", memberLevel, classColor, memberName))
+    end
+    
+    return coloredMembers
+end
+
+-- Removes a vote from the run's groupData and updates the display without reordering
+function IB:RemoveVote(voteToRemove)
+    if not InstanceBuddiesDB or not InstanceBuddiesDB.runs or not voteToRemove then
+        return
+    end
+    
+    -- Find the run and remove the vote from the member's data
+    for _, run in ipairs(InstanceBuddiesDB.runs) do
+        if run.enteredTime == voteToRemove.runTimestamp and 
+           run.instanceName == voteToRemove.instanceName then
+            
+            -- Find the member and remove vote data
+            if voteToRemove.targetMembers and #voteToRemove.targetMembers > 0 then
+                local memberName = voteToRemove.targetMembers[1]  -- Since we only vote on one member at a time now
+                if run.groupData and run.groupData[memberName] then
+                    run.groupData[memberName].voteType = nil
+                    run.groupData[memberName].voteNote = nil
+                    break
+                end
+            end
+        end
+    end
+    
+    -- Remove from filtered data directly to preserve ordering
+    local currentDataList
+    if self.currentView == "likes" then
+        currentDataList = self.filteredLikes or self:GetLikesData()
+        self.filteredLikes = currentDataList -- Ensure we have a filtered list to work with
+    elseif self.currentView == "dislikes" then
+        currentDataList = self.filteredDislikes or self:GetDislikesData()
+        self.filteredDislikes = currentDataList -- Ensure we have a filtered list to work with
+    else
+        currentDataList = {}
+    end
+    
+    -- Find and remove the vote from the filtered list
+    for i = #currentDataList, 1, -1 do
+        local vote = currentDataList[i]
+        if vote.runTimestamp == voteToRemove.runTimestamp and 
+           vote.instanceName == voteToRemove.instanceName and
+           vote.targetMembers and #vote.targetMembers > 0 and
+           vote.targetMembers[1] == voteToRemove.targetMembers[1] then
+            table.remove(currentDataList, i)
+            break
+        end
+    end
+    
+    -- Update the filtered data reference
+    if self.currentView == "likes" then
+        self.filteredLikes = currentDataList
+    elseif self.currentView == "dislikes" then
+        self.filteredDislikes = currentDataList
+    end
+    
+    -- Smart pagination logic
+    local itemCountAfterRemoval = #currentDataList
+    if itemCountAfterRemoval > 0 then
+        local totalPages = math.ceil(itemCountAfterRemoval / self.entriesPerPage)
+        
+        -- If current page is now invalid (no items on this page), go to previous page
+        if self.currentPage > totalPages then
+            self.currentPage = math.max(1, totalPages)
+        end
+        -- Otherwise, stay on the current page
+    else
+        -- No items left, reset to page 1
+        self.currentPage = 1
+    end
+    
+    -- Refresh the display (ordering is preserved)
+    self:UpdateMainFrame()
+end
+
+-- Stores vote data directly in the run's groupData
+function IB:SubmitVote(run, selectedMembers, voteType, notes)
+    if not run or not selectedMembers or #selectedMembers == 0 or not voteType then
+        return
+    end
+    
+    -- Ensure database structure exists
+    if not InstanceBuddiesDB then
+        InstanceBuddiesDB = { runs = {} }
+    end
+    if not InstanceBuddiesDB.runs then
+        InstanceBuddiesDB.runs = {}
+    end
+    
+    -- Find the actual run in the database and update it
+    local targetRun = nil
+    for _, dbRun in ipairs(InstanceBuddiesDB.runs) do
+        if dbRun.enteredTime == run.enteredTime and 
+           dbRun.instanceName == run.instanceName and 
+           dbRun.playerName == run.playerName then
+            targetRun = dbRun
+            break
+        end
+    end
+    
+    if not targetRun then
+        print("|cFFFF0000InstanceBuddies:|r Error: Could not find run to vote on")
+        return
+    end
+    
+    -- Apply vote to each selected member in the run's groupData
+    for _, memberName in ipairs(selectedMembers) do
+        if targetRun.groupData and targetRun.groupData[memberName] then
+            targetRun.groupData[memberName].voteType = voteType
+            targetRun.groupData[memberName].voteNote = notes and notes ~= "" and notes or nil
+        end
+    end
+    
+    -- Clear filtered data to refresh from database
+    if self.currentView == "likes" then
+        self.filteredLikes = nil
+    elseif self.currentView == "dislikes" then
+        self.filteredDislikes = nil
+    end
+    
+    -- Refresh the current view to show the updated vote
+    if self.mainFrame and self.mainFrame:IsShown() then
+        self:PerformSearch()
     end
 end
 
@@ -753,8 +1662,11 @@ function IB:UpdateMainFrame()
     if not self.mainFrame or not self.mainFrame.contentFrame then return end
     
     -- Safety check for database
-    if not InstanceBuddiesDB or not InstanceBuddiesDB.runs then
+    if not InstanceBuddiesDB then
         InstanceBuddiesDB = { runs = {} }
+    end
+    if not InstanceBuddiesDB.runs then
+        InstanceBuddiesDB.runs = {}
     end
     
     -- Safety check for entriesPerPage
@@ -762,7 +1674,10 @@ function IB:UpdateMainFrame()
         self.entriesPerPage = 10
     end
     
-    -- Update the party section first
+    -- Update navigation button states
+    self:UpdateNavigationButtons()
+    
+    -- Update the party section for all views (this is a main feature)
     self:UpdatePartySection()
     
     -- Clear existing rows
@@ -773,8 +1688,18 @@ function IB:UpdateMainFrame()
     end
     self.mainFrame.runRows = {}
     
-    -- Get the appropriate run list (filtered or full)
-    local runs = self.filteredRuns or InstanceBuddiesDB.runs
+    -- Get the appropriate data list based on current view
+    local dataList
+    if self.currentView == "pastRuns" then
+        dataList = self.filteredRuns or InstanceBuddiesDB.runs
+    elseif self.currentView == "likes" then
+        dataList = self.filteredLikes or self:GetLikesData()
+    elseif self.currentView == "dislikes" then
+        dataList = self.filteredDislikes or self:GetDislikesData()
+    else
+        dataList = {}
+    end
+    local runs = dataList
     local runCount = #runs
     local rowHeight = 20
     local startY = -10
@@ -793,7 +1718,7 @@ function IB:UpdateMainFrame()
         number = 0,      -- "1)"
         time = 30,        -- "Today 15:23"
         player = 150,     -- "50 Maddjones"
-        dungeon = 250,    -- "Maraudon"
+        dungeon = 265,    -- "Maraudon"
         group = 400       -- "54 Megarah, 44 Stibilibo ..."
     }
     
@@ -803,11 +1728,18 @@ function IB:UpdateMainFrame()
         noDataText:SetJustifyH("CENTER")
         noDataText:SetWidth(800)
         
-        -- Different message for search vs no data
+        -- Different message based on current view and search state
         if self.searchTerm and self.searchTerm ~= "" then
             noDataText:SetText("No results found for: \"" .. self.searchTerm .. "\"\n\nTry different keywords or clear the search.")
         else
-            noDataText:SetText("No instance runs recorded yet.\n\nEnter an instance with a group to start tracking your adventures!\n\nThe addon will automatically detect when you enter and leave instances.")
+            -- Different messages for each view
+            if self.currentView == "pastRuns" then
+                noDataText:SetText("No instance runs recorded yet.\n\nEnter an instance with a group to start tracking your adventures!\n\nThe addon will automatically record your run once it's been completed.")
+            elseif self.currentView == "likes" then
+                noDataText:SetText("No likes given yet.\n\nVote on group members from your past runs to start building your like history!\n\nUse the '+' button next to group members in Past Runs to vote.")
+            elseif self.currentView == "dislikes" then
+                noDataText:SetText("No dislikes given yet.\n\nVote on group members from your past runs to start building your dislike history!\n\nUse the '+' button next to group members in Past Runs to vote.")
+            end
         end
         
         noDataText:SetTextColor(1, 1, 1)
@@ -815,14 +1747,36 @@ function IB:UpdateMainFrame()
         
         -- Hide pagination controls when no results
         self.mainFrame.paginationFrame:Hide()
+        if self.mainFrame.pageText then
+            self.mainFrame.pageText:Hide()
+        end
         
-        -- Only hide search when there's truly no data in the database (not just no search results)
-        if not self.searchTerm or self.searchTerm == "" then
-            -- No data at all - hide search
-            self.mainFrame.searchFrame:Hide()
-        else
-            -- Search returned no results but database has data - keep search visible
-            self.mainFrame.searchFrame:Show()
+        -- Search visibility logic based on view and data availability
+        if self.currentView == "pastRuns" then
+            -- Only hide search when there's truly no data in the database (not just no search results)
+            if not self.searchTerm or self.searchTerm == "" then
+                -- No data at all - hide search
+                self.mainFrame.searchFrame:Hide()
+            else
+                -- Search returned no results but database has data - keep search visible
+                self.mainFrame.searchFrame:Show()
+            end
+        elseif self.currentView == "likes" then
+            -- Hide search if no likes data exists and no search term
+            local allLikes = self:GetLikesData()
+            if (#allLikes == 0) and (not self.searchTerm or self.searchTerm == "") then
+                self.mainFrame.searchFrame:Hide()
+            else
+                self.mainFrame.searchFrame:Show()
+            end
+        elseif self.currentView == "dislikes" then
+            -- Hide search if no dislikes data exists and no search term
+            local allDislikes = self:GetDislikesData()
+            if (#allDislikes == 0) and (not self.searchTerm or self.searchTerm == "") then
+                self.mainFrame.searchFrame:Hide()
+            else
+                self.mainFrame.searchFrame:Show()
+            end
         end
     else
         -- Show pagination controls and search
@@ -831,8 +1785,8 @@ function IB:UpdateMainFrame()
         
         local displayIndex = 1
         for i = startIndex, endIndex do
-            local run = runs[i]
-            if run then
+            local item = runs[i]
+            if item then
                 local yPos = startY - ((displayIndex-1) * rowHeight)
                 local row = {}
                 
@@ -843,69 +1797,128 @@ function IB:UpdateMainFrame()
                 numberText:SetTextColor(1, 1, 1)
                 table.insert(row, numberText)
                 
-                -- Time
-                local timeText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                timeText:SetPoint("TOPLEFT", positions.time, yPos)
-                timeText:SetText(self:FormatTimestamp(run.enteredTime))
-                table.insert(row, timeText)
-                
-                -- Player level and name combined (same spacing as group members)
-                local playerText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                playerText:SetPoint("TOPLEFT", positions.player, yPos)
-                playerText:SetText(string.format("|cFF888888%d|r %s%s|r", 
-                    run.playerLevel or 0, 
-                    self:GetClassColor(run.playerClass), 
-                    run.playerName or "Unknown"))
-                table.insert(row, playerText)
-                
-                -- Dungeon name (prominent)
-                local dungeonText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                dungeonText:SetPoint("TOPLEFT", positions.dungeon, yPos)
-                dungeonText:SetText(string.format("|cFF00BFFF%s|r", run.instanceName or "Unknown"))
-                table.insert(row, dungeonText)
-                
-                -- Group members (convert from key-value to display format)
-                local groupMembers = {}
-                local sortedMembers = self:GetSortedGroupMembers(run.groupData)
-                
-                for _, member in ipairs(sortedMembers) do
-                    local classColor = self:GetClassColor(member.class)
-                    local memberStr = string.format("|cFF888888%d|r %s%s|r", member.level, classColor, member.name)
-                    table.insert(groupMembers, memberStr)
-                end
-                
-                if #groupMembers > 0 then
-                    local groupText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                    groupText:SetPoint("TOPLEFT", positions.group, yPos)
+                if self.currentView == "pastRuns" then
+                    -- Display logic for run records
+                    local run = item
                     
-                    -- Check if we need to truncate the group list
-                    if #sortedMembers > 4 then
-                        -- Show first 4 members + "..."
-                        local truncatedMembers = {}
-                        for i = 1, 4 do
-                            table.insert(truncatedMembers, groupMembers[i])
-                        end
-                        local displayText = table.concat(truncatedMembers, "|cFF888888,|r ") .. "|cFF888888, ...|r"
-                        groupText:SetText(displayText)
-                        
-                        -- Store full member list for tooltip and enable mouse events
-                        local fullMemberList = sortedMembers
-                        groupText:EnableMouse(true)
-                        groupText:SetScript("OnEnter", function(self)
-                            IB:ShowGroupMembersTooltip(fullMemberList, self)
-                        end)
-                        groupText:SetScript("OnLeave", function()
-                            IB:HideGroupMembersTooltip()
-                        end)
-                    else
-                        -- Show all members normally
-                        groupText:SetText(table.concat(groupMembers, "|cFF888888,|r "))
-                        groupText:EnableMouse(false)
-                        groupText:SetScript("OnEnter", nil)
-                        groupText:SetScript("OnLeave", nil)
+                    -- Time
+                    local timeText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    timeText:SetPoint("TOPLEFT", positions.time, yPos)
+                    timeText:SetText(self:FormatTimestamp(run.enteredTime))
+                    table.insert(row, timeText)
+                    
+                    -- Player level and name combined
+                    local playerText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    playerText:SetPoint("TOPLEFT", positions.player, yPos)
+                    playerText:SetText(string.format("|cFF888888%d|r %s%s|r", 
+                        run.playerLevel or 0, 
+                        self:GetClassColor(run.playerClass), 
+                        run.playerName or "Unknown"))
+                    table.insert(row, playerText)
+                    
+                    -- Dungeon name
+                    local dungeonText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    dungeonText:SetPoint("TOPLEFT", positions.dungeon, yPos)
+                    dungeonText:SetText(string.format("|cFF00BFFF%s|r", run.instanceName or "Unknown"))
+                    table.insert(row, dungeonText)
+                    
+                    -- Group members
+                    local groupMembers = {}
+                    local sortedMembers = self:GetSortedGroupMembers(run.groupData)
+                    
+                    for _, member in ipairs(sortedMembers) do
+                        local classColor = self:GetClassColor(member.class)
+                        local memberStr = string.format("|cFF888888%d|r %s%s|r", member.level, classColor, member.name)
+                        table.insert(groupMembers, memberStr)
                     end
                     
-                    table.insert(row, groupText)
+                    if #groupMembers > 0 then
+                        -- Vote button
+                        local voteButton = CreateFrame("Button", nil, self.mainFrame.contentFrame, "UIPanelButtonTemplate")
+                        voteButton:SetSize(15, 12)
+                        voteButton:SetPoint("TOPLEFT", positions.group, yPos)
+                        voteButton:SetText("+")
+                        voteButton:SetScript("OnClick", function()
+                            IB:ShowVotingFrame(run)
+                        end)
+                        table.insert(row, voteButton)
+                        
+                        local groupText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                        groupText:SetPoint("TOPLEFT", positions.group + 20, yPos)
+                        
+                        if #sortedMembers > 4 then
+                            local truncatedMembers = {}
+                            for j = 1, 4 do
+                                table.insert(truncatedMembers, groupMembers[j])
+                            end
+                            local displayText = table.concat(truncatedMembers, "|cFF888888,|r ") .. "|cFF888888, ...|r"
+                            groupText:SetText(displayText)
+                            
+                            local fullMemberList = sortedMembers
+                            groupText:EnableMouse(true)
+                            groupText:SetScript("OnEnter", function(self)
+                                IB:ShowGroupMembersTooltip(fullMemberList, self)
+                            end)
+                            groupText:SetScript("OnLeave", function()
+                                IB:HideGroupMembersTooltip()
+                            end)
+                        else
+                            groupText:SetText(table.concat(groupMembers, "|cFF888888,|r "))
+                            groupText:EnableMouse(false)
+                            groupText:SetScript("OnEnter", nil)
+                            groupText:SetScript("OnLeave", nil)
+                        end
+                        
+                        table.insert(row, groupText)
+                    end
+                    
+                else
+                    -- Display logic for vote records (likes/dislikes)
+                    -- Order: timestamp, instanceName, targetMembers[], notes
+                    local vote = item
+                    
+                    -- Time (use run timestamp, not vote timestamp)
+                    local timeText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    timeText:SetPoint("TOPLEFT", positions.time, yPos)
+                    timeText:SetText(self:FormatTimestamp(vote.runTimestamp))
+                    table.insert(row, timeText)
+                    
+                    -- Instance name
+                    local instanceText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    instanceText:SetPoint("TOPLEFT", positions.player, yPos)
+                    instanceText:SetText(string.format("|cFF00BFFF%s|r", vote.instanceName or "Unknown"))
+                    table.insert(row, instanceText)
+                    
+                    -- Target members with class colors
+                    local memberText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    memberText:SetPoint("TOPLEFT", positions.dungeon, yPos)
+                    if vote.targetMembers and #vote.targetMembers > 0 then
+                        local coloredMembers = self:GetColoredTargetMembers(vote)
+                        memberText:SetText(table.concat(coloredMembers, "|cFF888888,|r "))
+                    else
+                        memberText:SetText("Unknown")
+                    end
+                    table.insert(row, memberText)
+                    
+                    -- Remove button (small button to delete the vote)
+                    local removeButton = CreateFrame("Button", nil, self.mainFrame.contentFrame, "UIPanelButtonTemplate")
+                    removeButton:SetSize(15, 12)
+                    removeButton:SetPoint("TOPLEFT", positions.group, yPos)
+                    removeButton:SetText("x")
+                    removeButton:SetScript("OnClick", function()
+                        IB:RemoveVote(vote)
+                    end)
+                    table.insert(row, removeButton)
+                    
+                    -- Notes
+                    local notesText = self.mainFrame.contentFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    notesText:SetPoint("TOPLEFT", positions.group + 20, yPos)  -- Offset by button width + small margin
+                    if vote.notes and vote.notes ~= "" then
+                        notesText:SetText(string.format("|cFFCCCCCC\"%s\"|r", vote.notes))
+                    else
+                        notesText:SetText("|cFF888888  no notes|r")
+                    end
+                    table.insert(row, notesText)
                 end
                 
                 table.insert(self.mainFrame.runRows, row)
@@ -913,14 +1926,19 @@ function IB:UpdateMainFrame()
             end
         end
         
-        -- Update pagination controls
-        self.mainFrame.prevBtn:SetEnabled(self.currentPage > 1)
-        self.mainFrame.nextBtn:SetEnabled(self.currentPage < totalPages)
-        
+        -- Update pagination controls - only show when there are 2+ pages
         if totalPages > 1 then
+            self.mainFrame.prevBtn:Show()
+            self.mainFrame.nextBtn:Show()
+            self.mainFrame.pageText:Show()
+            
+            self.mainFrame.prevBtn:SetEnabled(self.currentPage > 1)
+            self.mainFrame.nextBtn:SetEnabled(self.currentPage < totalPages)
             self.mainFrame.pageText:SetText(string.format("Page %d of %d", self.currentPage, totalPages))
         else
-            self.mainFrame.pageText:SetText("Page 1 of 1")
+            if self.mainFrame.prevBtn then self.mainFrame.prevBtn:Hide() end
+            if self.mainFrame.nextBtn then self.mainFrame.nextBtn:Hide() end
+            if self.mainFrame.pageText then self.mainFrame.pageText:Hide() end
         end
     end
     
@@ -944,7 +1962,10 @@ local function AddToGroupData(unit, groupData, partySlot)
     
     if level and name then
         if not groupData[name] then
-            groupData[name] = {}
+            groupData[name] = {
+                voteType = nil,  -- Initialize vote fields
+                voteNote = nil
+            }
         end
         
         -- Only update with valid data to avoid overwriting good info with bad
@@ -958,6 +1979,14 @@ local function AddToGroupData(unit, groupData, partySlot)
         -- Store slot for party ordering (0=player, 1-4=party, 1-40=raid)
         if partySlot and (not groupData[name].partySlot or partySlot > 0) then
             groupData[name].partySlot = partySlot
+        end
+        
+        -- Initialize vote fields if they don't exist (for existing data compatibility)
+        if groupData[name].voteType == nil then
+            groupData[name].voteType = nil
+        end
+        if groupData[name].voteNote == nil then
+            groupData[name].voteNote = nil
         end
     end
 end

@@ -42,3 +42,5 @@ luac.out
 # Project
 .cursorrules
 .vscode
+TODO.md
+.gitignore
