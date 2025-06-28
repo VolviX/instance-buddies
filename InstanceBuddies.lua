@@ -2202,29 +2202,47 @@ end
 
 print("|cFF00FF00InstanceBuddies|r loaded! Use /ib, /ibuddies, or /instancebuddies to view your instance history.")
 
--- Memory management - destroys tooltip FontString objects to prevent accumulation
+-- Memory management - destroys tooltip FontString objects and frames to prevent accumulation
 function IB:CleanupTooltips()
     if self.mainFrame then
-        if self.mainFrame.tooltip and self.mainFrame.tooltip.rows then
-            for _, row in pairs(self.mainFrame.tooltip.rows) do
-                if row then
-                    row:Hide()
-                    row:SetParent(nil)
-                    row:ClearAllPoints()
+        -- Clean up main tooltip
+        if self.mainFrame.tooltip then
+            if self.mainFrame.tooltip.rows then
+                for _, row in pairs(self.mainFrame.tooltip.rows) do
+                    if row then
+                        row:Hide()
+                        row:SetParent(nil)
+                        row:ClearAllPoints()
+                    end
                 end
+                self.mainFrame.tooltip.rows = {}
             end
-            self.mainFrame.tooltip.rows = {}
+            
+            -- Destroy the main tooltip frame itself
+            self.mainFrame.tooltip:Hide()
+            self.mainFrame.tooltip:ClearAllPoints()
+            self.mainFrame.tooltip:SetParent(nil)
+            self.mainFrame.tooltip = nil
         end
         
-        if self.mainFrame.groupTooltip and self.mainFrame.groupTooltip.rows then
-            for _, row in pairs(self.mainFrame.groupTooltip.rows) do
-                if row then
-                    row:Hide()
-                    row:SetParent(nil)
-                    row:ClearAllPoints()
+        -- Clean up group tooltip
+        if self.mainFrame.groupTooltip then
+            if self.mainFrame.groupTooltip.rows then
+                for _, row in pairs(self.mainFrame.groupTooltip.rows) do
+                    if row then
+                        row:Hide()
+                        row:SetParent(nil)
+                        row:ClearAllPoints()
+                    end
                 end
+                self.mainFrame.groupTooltip.rows = {}
             end
-            self.mainFrame.groupTooltip.rows = {}
+            
+            -- Destroy the group tooltip frame itself
+            self.mainFrame.groupTooltip:Hide()
+            self.mainFrame.groupTooltip:ClearAllPoints()
+            self.mainFrame.groupTooltip:SetParent(nil)
+            self.mainFrame.groupTooltip = nil
         end
     end
 end 
