@@ -2096,7 +2096,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
                     -- Clean up timer frame to prevent memory leaks
                     self:SetScript("OnUpdate", nil)
                     self:Hide()
-                    self = nil
                 end
             end)
         elseif event == "PLAYER_LEAVING_WORLD" then
