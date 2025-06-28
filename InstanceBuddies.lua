@@ -1742,10 +1742,13 @@ function IB:UpdateMainFrame()
     -- Update the party section for all views (this is a main feature)
     self:UpdatePartySection()
     
-    -- Clear existing rows
+    -- Clear existing rows with proper memory cleanup
     for _, row in pairs(self.mainFrame.runRows) do
         for _, element in pairs(row) do
+            -- Proper cleanup to prevent memory leaks
             element:Hide()
+            element:ClearAllPoints()
+            element:SetParent(nil)
         end
     end
     self.mainFrame.runRows = {}
