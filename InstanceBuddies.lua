@@ -1013,7 +1013,7 @@ function IB:UpdatePartySection()
             IB:HidePartyTooltip()
         end)
     else
-        socialStatusLine:SetText("Your social status will show up here!")
+        socialStatusLine:SetText("Start liking and disliking to build your social history!")
     end
 end
 
