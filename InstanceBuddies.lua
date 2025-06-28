@@ -2165,7 +2165,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
                     timerFrame:SetScript("OnUpdate", nil)
                     timerFrame:Hide()
                     timerFrame:SetParent(nil)
-                    delayFrame = nil -- Clear the reference to allow garbage collection
+                    -- Frame reference will be garbage collected automatically
                 end
             end)
         elseif event == "PLAYER_LEAVING_WORLD" then
@@ -2222,7 +2222,8 @@ function IB:CleanupTooltips()
             self.mainFrame.tooltip:Hide()
             self.mainFrame.tooltip:ClearAllPoints()
             self.mainFrame.tooltip:SetParent(nil)
-            self.mainFrame.tooltip = nil
+            -- Clear reference using rawset to avoid type checking issues
+            rawset(self.mainFrame, "tooltip", nil)
         end
         
         -- Clean up group tooltip
@@ -2242,7 +2243,8 @@ function IB:CleanupTooltips()
             self.mainFrame.groupTooltip:Hide()
             self.mainFrame.groupTooltip:ClearAllPoints()
             self.mainFrame.groupTooltip:SetParent(nil)
-            self.mainFrame.groupTooltip = nil
+            -- Clear reference using rawset to avoid type checking issues
+            rawset(self.mainFrame, "groupTooltip", nil)
         end
     end
 end 
