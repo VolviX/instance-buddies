@@ -957,70 +957,64 @@ function IB:UpdatePartySection()
     -- Get social status for current group members
     local socialStatus = self:GetGroupSocialStatus()
     
-    if #history == 0 and #socialStatus == 0 then
-        -- In a group but no shared history or social status
-        partyHistoryLine:SetText("No shared history with your current group.")
-        socialStatusLine:SetText("")
-    else
-        -- Build history line
-        if #history > 0 then
-            local historyParts = {}
-            for _, member in ipairs(history) do
-                local classColor = self:GetClassColor(member.class)
-                local runText = member.count == 1 and "run" or "runs"
-                table.insert(historyParts, string.format("%d %s with %s%s|r", 
-                    member.count, runText, classColor, member.name))
-            end
-            
-            local historyMessage = "Group history: " .. table.concat(historyParts, ", ") .. " |cFF888888(hover for details)|r"
-            partyHistoryLine:SetText(historyMessage)
-            
-            -- Always enable hover tooltip for shared history when there's history
-            partyHistoryLine:EnableMouse(true)
-            partyHistoryLine:SetScript("OnEnter", function()
-                IB:ShowUnifiedTooltip()
-            end)
-            partyHistoryLine:SetScript("OnLeave", function()
-                IB:HidePartyTooltip()
-            end)
-        else
-            partyHistoryLine:SetText("")
+    -- Build history line
+    if #history > 0 then
+        local historyParts = {}
+        for _, member in ipairs(history) do
+            local classColor = self:GetClassColor(member.class)
+            local runText = member.count == 1 and "run" or "runs"
+            table.insert(historyParts, string.format("%d %s with %s%s|r", 
+                member.count, runText, classColor, member.name))
         end
         
-        -- Build social status line
-        if #socialStatus > 0 then
-            local statusParts = {}
-            for _, status in ipairs(socialStatus) do
-                local classColor = self:GetClassColor(status.class)
-                local statusText, statusColor
-                if status.voteType == "mixed" then
-                    statusText = "(mixed)"
-                    statusColor = "|cFFFFFF00" -- Yellow for mixed
-                elseif status.voteType == "like" then
-                    statusText = "(liked)"
-                    statusColor = "|cFF00FF00" -- Green for liked
-                else -- dislike
-                    statusText = "(disliked)"
-                    statusColor = "|cFFFF0000" -- Red for disliked
-                end
-                table.insert(statusParts, string.format("%s%s|r %s%s|r", 
-                    classColor, status.name, statusColor, statusText))
+        local historyMessage = "Group history: " .. table.concat(historyParts, ", ") .. " |cFF888888(hover for details)|r"
+        partyHistoryLine:SetText(historyMessage)
+        
+        -- Always enable hover tooltip for shared history when there's history
+        partyHistoryLine:EnableMouse(true)
+        partyHistoryLine:SetScript("OnEnter", function()
+            IB:ShowUnifiedTooltip()
+        end)
+        partyHistoryLine:SetScript("OnLeave", function()
+            IB:HidePartyTooltip()
+        end)
+    else
+        partyHistoryLine:SetText("No shared history with your current group.")
+    end
+    
+    -- Build social status line
+    if #socialStatus > 0 then
+        local statusParts = {}
+        for _, status in ipairs(socialStatus) do
+            local classColor = self:GetClassColor(status.class)
+            local statusText, statusColor
+            if status.voteType == "mixed" then
+                statusText = "(mixed)"
+                statusColor = "|cFFFFFF00" -- Yellow for mixed
+            elseif status.voteType == "like" then
+                statusText = "(liked)"
+                statusColor = "|cFF00FF00" -- Green for liked
+            else -- dislike
+                statusText = "(disliked)"
+                statusColor = "|cFFFF0000" -- Red for disliked
             end
-            
-            local socialMessage = "Social status: " .. table.concat(statusParts, ", ") .. " |cFF888888(hover for details)|r"
-            socialStatusLine:SetText(socialMessage)
-            
-            -- Enable hover tooltip for social status
-            socialStatusLine:EnableMouse(true)
-            socialStatusLine:SetScript("OnEnter", function()
-                IB:ShowUnifiedTooltip()
-            end)
-            socialStatusLine:SetScript("OnLeave", function()
-                IB:HidePartyTooltip()
-            end)
-        else
-            socialStatusLine:SetText("")
+            table.insert(statusParts, string.format("%s%s|r %s%s|r", 
+                classColor, status.name, statusColor, statusText))
         end
+        
+        local socialMessage = "Social status: " .. table.concat(statusParts, ", ") .. " |cFF888888(hover for details)|r"
+        socialStatusLine:SetText(socialMessage)
+        
+        -- Enable hover tooltip for social status
+        socialStatusLine:EnableMouse(true)
+        socialStatusLine:SetScript("OnEnter", function()
+            IB:ShowUnifiedTooltip()
+        end)
+        socialStatusLine:SetScript("OnLeave", function()
+            IB:HidePartyTooltip()
+        end)
+    else
+        socialStatusLine:SetText("Your social status will show up here!")
     end
 end
 
