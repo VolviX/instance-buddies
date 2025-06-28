@@ -72,8 +72,7 @@ function IB:CreateMainFrame()
         IB:CleanupTooltips()  -- Essential for memory management
         -- Close voting frame if open
         if IB.votingFrame then
-            IB.votingFrame:Hide()
-            IB.votingFrame = nil
+            IB:CleanupVotingFrame()
         end
         frame:Hide() 
     end)
@@ -1018,14 +1017,81 @@ function IB:UpdatePartySection()
     end
 end
 
+-- Properly cleanup voting frame and all child elements to prevent memory leaks
+function IB:CleanupVotingFrame()
+    if not self.votingFrame then return end
+    
+    local frame = self.votingFrame
+    
+    -- Clean up member checkboxes and their labels
+    if frame.memberCheckboxes then
+        for memberName, checkbox in pairs(frame.memberCheckboxes) do
+            -- Clear scripts to remove event handlers
+            checkbox:SetScript("OnClick", nil)
+            checkbox:SetScript("OnEnter", nil)
+            checkbox:SetScript("OnLeave", nil)
+            
+            -- Hide and clear positioning
+            checkbox:Hide()
+            checkbox:ClearAllPoints()
+            checkbox:SetParent(nil)
+        end
+        -- Clear the checkboxes table
+        for k in pairs(frame.memberCheckboxes) do
+            frame.memberCheckboxes[k] = nil
+        end
+        frame.memberCheckboxes = nil
+    end
+    
+    -- Clean up member labels
+    if frame.memberLabels then
+        for memberName, label in pairs(frame.memberLabels) do
+            -- Hide and clear positioning
+            label:Hide()
+            label:ClearAllPoints()
+            label:SetParent(nil)
+        end
+        -- Clear the labels table
+        for k in pairs(frame.memberLabels) do
+            frame.memberLabels[k] = nil
+        end
+        frame.memberLabels = nil
+    end
+    
+    -- Clean up notes box
+    if frame.notesBox then
+        frame.notesBox:SetScript("OnEnterPressed", nil)
+        frame.notesBox:SetScript("OnTextChanged", nil)
+        frame.notesBox:ClearFocus()
+        frame.notesBox:Hide()
+        frame.notesBox:ClearAllPoints()
+        frame.notesBox:SetParent(nil)
+        frame.notesBox = nil
+    end
+    
+    -- Clean up all frame scripts and event handlers
+    frame:SetScript("OnKeyDown", nil)
+    frame:SetScript("OnDragStart", nil)
+    frame:SetScript("OnDragStop", nil)
+    frame:EnableKeyboard(false)
+    frame:EnableMouse(false)
+    
+    -- Hide and clear the main frame
+    frame:Hide()
+    frame:ClearAllPoints()
+    frame:SetParent(nil)
+    
+    -- Clear the reference
+    self.votingFrame = nil
+end
+
 -- Create and show the voting frame for a specific run
 function IB:ShowVotingFrame(run)
     if not run then return end
     
     -- Close existing voting frame if open
     if self.votingFrame then
-        self.votingFrame:Hide()
-        self.votingFrame = nil
+        self:CleanupVotingFrame()
     end
     
     -- Main voting frame
@@ -1064,8 +1130,7 @@ function IB:ShowVotingFrame(run)
     closeBtn:SetPoint("TOPRIGHT", -10, -10)
     closeBtn:SetText("Close")
     closeBtn:SetScript("OnClick", function() 
-        frame:Hide()
-        self.votingFrame = nil
+        self:CleanupVotingFrame()
     end)
     
     -- Party members selection area
@@ -1090,6 +1155,7 @@ function IB:ShowVotingFrame(run)
     
     -- Create checkboxes for each party member
     local memberCheckboxes = {}
+    local memberLabels = {}
     local sortedMembers = self:GetSortedGroupMembers(run.groupData)
     local yOffset = -5
     
@@ -1103,6 +1169,7 @@ function IB:ShowVotingFrame(run)
         label:SetText(string.format("%s%s|r", self:GetClassColor(member.class), member.name))
         
         memberCheckboxes[member.name] = checkbox
+        memberLabels[member.name] = label
         yOffset = yOffset - 20
     end
     
@@ -1137,8 +1204,7 @@ function IB:ShowVotingFrame(run)
         if #selectedMembers > 0 then
             self:SubmitVote(run, selectedMembers, "like", notesBox:GetText())
         end
-        frame:Hide()
-        self.votingFrame = nil
+        self:CleanupVotingFrame()
     end)
     
     local dislikeBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -1155,8 +1221,7 @@ function IB:ShowVotingFrame(run)
         if #selectedMembers > 0 then
             self:SubmitVote(run, selectedMembers, "dislike", notesBox:GetText())
         end
-        frame:Hide()
-        self.votingFrame = nil
+        self:CleanupVotingFrame()
     end)
     
     -- Initially disable buttons and notes since no members are selected
@@ -1213,6 +1278,7 @@ function IB:ShowVotingFrame(run)
     
     -- Store references
     frame.memberCheckboxes = memberCheckboxes
+    frame.memberLabels = memberLabels
     frame.notesBox = notesBox
     self.votingFrame = frame
     
@@ -1228,8 +1294,7 @@ function IB:ShowVotingFrame(run)
                 self:SetPropagateKeyboardInput(true)
             else
                 -- No input focused, close voting frame
-                frame:Hide()
-                IB.votingFrame = nil
+                IB:CleanupVotingFrame()
                 self:SetPropagateKeyboardInput(false)  -- Block ESC from propagating further
             end
         else
