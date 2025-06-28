@@ -2145,7 +2145,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             -- Delay needed because IsInInstance() is unreliable immediately after login/teleport
             local delayFrame = CreateFrame("Frame")
             local startTime = GetTime()
-            delayFrame:SetScript("OnUpdate", function(self)
+            delayFrame:SetScript("OnUpdate", function(timerFrame)
                 if GetTime() - startTime >= 1 then
                     local inInstance, instanceType = IsInInstance()
                     
@@ -2158,9 +2158,11 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
                         IB:OnLeftInstance()
                     end
                     
-                    -- Clean up timer frame to prevent memory leaks
-                    self:SetScript("OnUpdate", nil)
-                    self:Hide()
+                    -- Properly clean up timer frame to prevent memory leaks
+                    timerFrame:SetScript("OnUpdate", nil)
+                    timerFrame:Hide()
+                    timerFrame:SetParent(nil)
+                    delayFrame = nil -- Clear the reference to allow garbage collection
                 end
             end)
         elseif event == "PLAYER_LEAVING_WORLD" then
